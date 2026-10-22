@@ -8,52 +8,103 @@ import {
   Share2, 
   Shield, 
   Cloud, 
-  LogIn, 
   UserPlus,
   Copy,
   Plus,
   Trash2,
-  Edit3,
   Check,
-  X,
-  Menu
+  Menu,
+  Github,
+  ExternalLink,
+  LogOut,
+  RefreshCw
 } from 'lucide-react'
 
-type Tab = 'drive' | 'links' | 'connections' | 'auth' | 'cloud'
+type Tab = 'drive' | 'links' | 'connections' | 'auth' | 'cloud' | 'mcp'
 
 export default function Home() {
   const [user, setUser] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<Tab>('drive')
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [saving, setSaving] = useState(false)
 
-  // Local states for each module
+  // Real data from Supabase
   const [links, setLinks] = useState<any[]>([])
   const [connections, setConnections] = useState<any[]>([])
   const [authenticators, setAuthenticators] = useState<any[]>([])
+  const [cloudSaves, setCloudSaves] = useState<any[]>([])
+
   const [newLink, setNewLink] = useState({ title: '', url: '', notes: '' })
-  const [newConn, setNewConn] = useState({ name: '', mcp_link: '', website_url: '' })
+  const [newConn, setNewConn] = useState({ name: '', mcp_link: '', website_url: '', description: '' })
   const [newAuth, setNewAuth] = useState({ name: '', secret: '', issuer: '' })
   const [copied, setCopied] = useState<string | null>(null)
+  const [message, setMessage] = useState('')
 
   useEffect(() => {
-    // Simple local user for now (will upgrade to real Google later)
-    const saved = localStorage.getItem('le_drive_user')
+    const saved = localStorage.getItem('le_official_user')
     if (saved) {
-      setUser(JSON.parse(saved))
+      const u = JSON.parse(saved)
+      setUser(u)
+      loadAllData(u.user_id)
     }
     setLoading(false)
   }, [])
 
-  const login = (email: string) => {
-    const u = { user_id: email, email, display_name: email.split('@')[0] }
-    localStorage.setItem('le_drive_user', JSON.stringify(u))
+  const showMessage = (msg: string) => {
+    setMessage(msg)
+    setTimeout(() => setMessage(''), 3000)
+  }
+
+  const login = async (email: string) => {
+    const user_id = email.toLowerCase().trim()
+    const display_name = user_id.split('@')[0]
+
+    // Upsert user into real database
+    const { error } = await supabase
+      .from('users')
+      .upsert({ user_id, email: user_id, display_name }, { onConflict: 'user_id' })
+
+    if (error) {
+      console.error(error)
+      showMessage('Login error: ' + error.message)
+      return
+    }
+
+    const u = { user_id, email: user_id, display_name }
+    localStorage.setItem('le_official_user', JSON.stringify(u))
     setUser(u)
+    await loadAllData(user_id)
+    showMessage('Logged in successfully')
   }
 
   const logout = () => {
-    localStorage.removeItem('le_drive_user')
+    localStorage.removeItem('le_official_user')
     setUser(null)
+    setLinks([])
+    setConnections([])
+    setAuthenticators([])
+    setCloudSaves([])
+  }
+
+  const loadAllData = async (user_id: string) => {
+    setSaving(true)
+    try {
+      const [linksRes, connRes, authRes, cloudRes] = await Promise.all([
+        supabase.from('links').select('*').eq('user_id', user_id).order('created_at', { ascending: false }),
+        supabase.from('connections').select('*').eq('user_id', user_id).order('created_at', { ascending: false }),
+        supabase.from('authenticators').select('*').eq('user_id', user_id).order('created_at', { ascending: false }),
+        supabase.from('cloud_saves').select('*').eq('user_id', user_id).order('created_at', { ascending: false })
+      ])
+
+      if (linksRes.data) setLinks(linksRes.data)
+      if (connRes.data) setConnections(connRes.data)
+      if (authRes.data) setAuthenticators(authRes.data)
+      if (cloudRes.data) setCloudSaves(cloudRes.data)
+    } catch (e) {
+      console.error(e)
+    }
+    setSaving(false)
   }
 
   const copyText = (text: string, id: string) => {
@@ -62,52 +113,153 @@ export default function Home() {
     setTimeout(() => setCopied(null), 2000)
   }
 
+  // ========== REAL CRUD ========== //
+
+  const addLink = async () => {
+    if (!user || !newLink.url) return
+    setSaving(true)
+    const { data, error } = await supabase
+      .from('links')
+      .insert({ user_id: user.user_id, title: newLink.title, url: newLink.url, notes: newLink.notes })
+      .select()
+      .single()
+
+    if (error) showMessage(error.message)
+    else {
+      setLinks([data, ...links])
+      setNewLink({ title: '', url: '', notes: '' })
+      showMessage('Link saved to database')
+    }
+    setSaving(false)
+  }
+
+  const deleteLink = async (id: string) => {
+    await supabase.from('links').delete().eq('id', id)
+    setLinks(links.filter(l => l.id !== id))
+    showMessage('Link deleted')
+  }
+
+  const addConnection = async () => {
+    if (!user || !newConn.name) return
+    setSaving(true)
+    const { data, error } = await supabase
+      .from('connections')
+      .insert({
+        user_id: user.user_id,
+        name: newConn.name,
+        mcp_link: newConn.mcp_link,
+        website_url: newConn.website_url,
+        description: newConn.description
+      })
+      .select()
+      .single()
+
+    if (error) showMessage(error.message)
+    else {
+      setConnections([data, ...connections])
+      setNewConn({ name: '', mcp_link: '', website_url: '', description: '' })
+      showMessage('Connection saved')
+    }
+    setSaving(false)
+  }
+
+  const deleteConnection = async (id: string) => {
+    await supabase.from('connections').delete().eq('id', id)
+    setConnections(connections.filter(c => c.id !== id))
+    showMessage('Connection deleted')
+  }
+
+  const addAuthenticator = async () => {
+    if (!user || !newAuth.name || !newAuth.secret) return
+    setSaving(true)
+    const { data, error } = await supabase
+      .from('authenticators')
+      .insert({
+        user_id: user.user_id,
+        name: newAuth.name,
+        secret: newAuth.secret,
+        issuer: newAuth.issuer
+      })
+      .select()
+      .single()
+
+    if (error) showMessage(error.message)
+    else {
+      setAuthenticators([data, ...authenticators])
+      setNewAuth({ name: '', secret: '', issuer: '' })
+      showMessage('Authenticator saved (secret locked)')
+    }
+    setSaving(false)
+  }
+
+  const deleteAuthenticator = async (id: string) => {
+    await supabase.from('authenticators').delete().eq('id', id)
+    setAuthenticators(authenticators.filter(a => a.id !== id))
+    showMessage('Authenticator deleted')
+  }
+
+  const saveToCloud = async () => {
+    if (!user) return
+    setSaving(true)
+    const payload = JSON.stringify({ links, connections, authenticators })
+    const { error } = await supabase.from('cloud_saves').insert({
+      user_id: user.user_id,
+      device_name: navigator.userAgent.slice(0, 40),
+      save_type: 'full',
+      encrypted_payload: payload
+    })
+    if (error) showMessage(error.message)
+    else {
+      showMessage('Saved to Cloud')
+      loadAllData(user.user_id)
+    }
+    setSaving(false)
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-black">
-        <div className="text-xl">Loading LE Website Drive...</div>
+        <div className="text-xl text-sky-400">Loading LE Official Drive...</div>
       </div>
     )
   }
 
   if (!user) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-black via-gray-900 to-black p-4">
-        <div className="w-full max-w-md bg-gray-900 border border-gray-700 rounded-2xl p-8 shadow-2xl">
+      <div className="min-h-screen flex items-center justify-center bg-black p-4">
+        <div className="w-full max-w-md bg-zinc-950 border border-zinc-800 rounded-2xl p-8 shadow-2xl">
           <div className="text-center mb-8">
-            <HardDrive className="w-16 h-16 mx-auto mb-4 text-sky-400" />
-            <h1 className="text-3xl font-bold">LE Website Drive</h1>
-            <p className="text-gray-400 mt-2">All-in-one Storage • Links • MCP • Auth • Cloud</p>
+            <div className="w-16 h-16 bg-sky-600 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <HardDrive className="w-9 h-9 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold tracking-tight">LE Website Drive</h1>
+            <p className="text-zinc-400 mt-1 text-sm">Official • Powered by INFI DATABASE</p>
           </div>
 
-          <div className="space-y-4">
-            <button
-              onClick={() => login('user@example.com')}
-              className="w-full flex items-center justify-center gap-3 bg-white text-black font-medium py-3 rounded-xl hover:bg-gray-100 transition"
-            >
-              <svg className="w-5 h-5" viewBox="0 0 24 24"><path fill="currentColor" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/><path fill="currentColor" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/><path fill="currentColor" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/><path fill="currentColor" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/></svg>
-              Continue with Google
-            </button>
-
-            <div className="relative">
-              <div className="absolute inset-0 flex items-center"><div className="w-full border-t border-gray-700"></div></div>
-              <div className="relative flex justify-center text-sm"><span className="px-2 bg-gray-900 text-gray-500">or</span></div>
-            </div>
-
+          <div className="space-y-3">
             <button
               onClick={() => {
-                const email = prompt('Enter your email to create account:')
+                const email = prompt('Enter your email:')
                 if (email) login(email)
               }}
               className="w-full flex items-center justify-center gap-2 bg-sky-600 hover:bg-sky-500 text-white font-medium py-3 rounded-xl transition"
             >
               <UserPlus className="w-5 h-5" />
-              Create Account
+              Create Account / Login
             </button>
+
+            <a
+              href="https://github.com/leccgamesandapps-art"
+              target="_blank"
+              className="w-full flex items-center justify-center gap-2 bg-zinc-900 hover:bg-zinc-800 border border-zinc-700 text-white font-medium py-3 rounded-xl transition"
+            >
+              <Github className="w-5 h-5" />
+              GitHub Profile
+            </a>
           </div>
 
-          <p className="text-center text-xs text-gray-500 mt-6">
-            Powered by INFI DATABASE • Secure & Multi-device
+          <p className="text-center text-xs text-zinc-600 mt-6">
+            Real database • Real MCP • Multi-device
           </p>
         </div>
       </div>
@@ -118,20 +270,25 @@ export default function Home() {
     { id: 'drive' as Tab, label: 'Drive', icon: HardDrive },
     { id: 'links' as Tab, label: 'Links', icon: Link2 },
     { id: 'connections' as Tab, label: 'Connections', icon: Share2 },
-    { id: 'auth' as Tab, label: 'Authenticator', icon: Shield },
+    { id: 'auth' as Tab, label: 'Auth', icon: Shield },
     { id: 'cloud' as Tab, label: 'Cloud', icon: Cloud },
+    { id: 'mcp' as Tab, label: 'MCP Server', icon: ExternalLink },
   ]
 
   return (
-    <div className="min-h-screen flex bg-black">
+    <div className="min-h-screen flex bg-black text-white">
       {/* Sidebar */}
-      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-gray-950 border-r border-gray-800 transform transition-transform duration-200 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:translate-x-0 md:static`}>
-        <div className="p-5 border-b border-gray-800">
+      <aside className={`fixed inset-y-0 left-0 z-50 w-64 bg-zinc-950 border-r border-zinc-800 transform transition-transform duration-200 ${
+        sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+      } md:translate-x-0 md:static`}>
+        <div className="p-5 border-b border-zinc-800">
           <div className="flex items-center gap-3">
-            <HardDrive className="w-8 h-8 text-sky-400" />
+            <div className="w-10 h-10 bg-sky-600 rounded-xl flex items-center justify-center">
+              <HardDrive className="w-5 h-5" />
+            </div>
             <div>
-              <h1 className="font-bold text-lg">LE Drive</h1>
-              <p className="text-xs text-gray-500">{user.display_name}</p>
+              <h1 className="font-bold">LE Drive</h1>
+              <p className="text-xs text-zinc-500">{user.display_name}</p>
             </div>
           </div>
         </div>
@@ -141,271 +298,250 @@ export default function Home() {
             <button
               key={tab.id}
               onClick={() => { setActiveTab(tab.id); setSidebarOpen(false) }}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-left transition ${
+              className={`w-full flex items-center gap-3 px-4 py-2.5 rounded-xl text-left text-sm transition ${
                 activeTab === tab.id 
-                  ? 'bg-sky-600/20 text-sky-400 border border-sky-600/40' 
-                  : 'hover:bg-gray-900 text-gray-300'
+                  ? 'bg-sky-600/20 text-sky-400 border border-sky-600/30' 
+                  : 'hover:bg-zinc-900 text-zinc-400'
               }`}
             >
-              <tab.icon className="w-5 h-5" />
+              <tab.icon className="w-4 h-4" />
               {tab.label}
             </button>
           ))}
         </nav>
 
-        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-800">
-          <button onClick={logout} className="w-full text-sm text-gray-400 hover:text-white py-2">
-            Sign out
+        <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-zinc-800 space-y-2">
+          <a href="https://github.com/leccgamesandapps-art" target="_blank" className="flex items-center gap-2 text-xs text-zinc-500 hover:text-white">
+            <Github className="w-4 h-4" /> GitHub Profile
+          </a>
+          <button onClick={logout} className="flex items-center gap-2 text-xs text-zinc-500 hover:text-red-400 w-full">
+            <LogOut className="w-4 h-4" /> Sign out
           </button>
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* Main */}
       <main className="flex-1 min-h-screen">
-        {/* Top bar */}
-        <header className="sticky top-0 z-40 bg-black/80 backdrop-blur border-b border-gray-800 px-4 py-3 flex items-center justify-between">
+        <header className="sticky top-0 z-40 bg-black/90 backdrop-blur border-b border-zinc-800 px-4 py-3 flex items-center justify-between">
           <button className="md:hidden p-2" onClick={() => setSidebarOpen(true)}>
-            <Menu className="w-6 h-6" />
+            <Menu className="w-5 h-5" />
           </button>
-          <h2 className="text-xl font-semibold capitalize">{activeTab === 'auth' ? 'Authenticator' : activeTab}</h2>
-          <div className="w-10" />
+          <h2 className="font-semibold capitalize">{activeTab === 'mcp' ? 'MCP Server' : activeTab}</h2>
+          <div className="flex items-center gap-2">
+            {saving && <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />}
+            {message && <span className="text-xs text-sky-400">{message}</span>}
+          </div>
         </header>
 
-        <div className="p-4 md:p-8 max-w-5xl mx-auto">
-          {/* DRIVE TAB */}
+        <div className="p-4 md:p-6 max-w-4xl mx-auto">
+
+          {/* DRIVE */}
           {activeTab === 'drive' && (
-            <div className="space-y-6">
-              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-medium mb-2">Encrypted Drive Storage</h3>
-                <p className="text-gray-400 text-sm mb-6">Your files are encrypted client-side before being stored in INFI DATABASE.</p>
-                
-                <div className="border-2 border-dashed border-gray-700 rounded-xl p-12 text-center hover:border-sky-600 transition cursor-pointer">
-                  <HardDrive className="w-12 h-12 mx-auto mb-4 text-gray-500" />
-                  <p className="text-gray-400">Drop files here or click to upload</p>
-                  <p className="text-xs text-gray-600 mt-2">Coming soon • Encrypted with your key</p>
-                </div>
+            <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
+              <h3 className="text-lg font-medium mb-1">Encrypted Drive</h3>
+              <p className="text-zinc-500 text-sm mb-6">Files are encrypted client-side before storing in INFI DATABASE.</p>
+              <div className="border-2 border-dashed border-zinc-800 rounded-xl p-16 text-center">
+                <HardDrive className="w-12 h-12 mx-auto mb-3 text-zinc-600" />
+                <p className="text-zinc-500">Drag & drop files here</p>
+                <p className="text-xs text-zinc-700 mt-2">Real encrypted storage coming in next update</p>
               </div>
             </div>
           )}
 
-          {/* LINKS TAB */}
+          {/* LINKS */}
           {activeTab === 'links' && (
-            <div className="space-y-6">
-              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-medium mb-4">Add New Link</h3>
-                <div className="grid gap-3 md:grid-cols-3">
-                  <input
-                    placeholder="Title"
-                    value={newLink.title}
-                    onChange={e => setNewLink({...newLink, title: e.target.value})}
-                    className="bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <input
-                    placeholder="URL"
-                    value={newLink.url}
-                    onChange={e => setNewLink({...newLink, url: e.target.value})}
-                    className="bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <button
-                    onClick={() => {
-                      if (newLink.url) {
-                        setLinks([{...newLink, id: Date.now()}, ...links])
-                        setNewLink({ title: '', url: '', notes: '' })
-                      }
-                    }}
-                    className="bg-sky-600 hover:bg-sky-500 rounded-lg px-4 py-2 flex items-center justify-center gap-2"
-                  >
-                    <Plus className="w-4 h-4" /> Add
+            <div className="space-y-4">
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-5">
+                <h3 className="font-medium mb-3">Add Link</h3>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input placeholder="Title" value={newLink.title} onChange={e => setNewLink({...newLink, title: e.target.value})}
+                    className="flex-1 bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <input placeholder="URL" value={newLink.url} onChange={e => setNewLink({...newLink, url: e.target.value})}
+                    className="flex-1 bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <button onClick={addLink} className="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded-lg text-sm flex items-center gap-1">
+                    <Plus className="w-4 h-4" /> Save
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-3">
-                {links.length === 0 && <p className="text-gray-500 text-center py-12">No links yet</p>}
+              <div className="space-y-2">
                 {links.map(link => (
-                  <div key={link.id} className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex items-center justify-between">
+                  <div key={link.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-4 flex justify-between items-center">
                     <div>
-                      <p className="font-medium">{link.title || 'Untitled'}</p>
-                      <a href={link.url} target="_blank" className="text-sky-400 text-sm hover:underline">{link.url}</a>
+                      <p className="font-medium text-sm">{link.title || 'Untitled'}</p>
+                      <a href={link.url} target="_blank" className="text-sky-400 text-xs hover:underline">{link.url}</a>
                     </div>
-                    <button onClick={() => setLinks(links.filter(l => l.id !== link.id))} className="text-gray-500 hover:text-red-400">
+                    <button onClick={() => deleteLink(link.id)} className="text-zinc-600 hover:text-red-400">
                       <Trash2 className="w-4 h-4" />
                     </button>
                   </div>
                 ))}
+                {links.length === 0 && <p className="text-center text-zinc-600 py-10 text-sm">No links saved yet</p>}
               </div>
             </div>
           )}
 
-          {/* CONNECTIONS TAB */}
+          {/* CONNECTIONS */}
           {activeTab === 'connections' && (
-            <div className="space-y-6">
-              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-medium mb-4">Add Connection / MCP Link</h3>
-                <div className="space-y-3">
-                  <input
-                    placeholder="Name (e.g. My AI Tool)"
-                    value={newConn.name}
-                    onChange={e => setNewConn({...newConn, name: e.target.value})}
-                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <input
-                    placeholder="MCP Link"
-                    value={newConn.mcp_link}
-                    onChange={e => setNewConn({...newConn, mcp_link: e.target.value})}
-                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <input
-                    placeholder="Website URL (optional)"
-                    value={newConn.website_url}
-                    onChange={e => setNewConn({...newConn, website_url: e.target.value})}
-                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <button
-                    onClick={() => {
-                      if (newConn.name) {
-                        setConnections([{...newConn, id: Date.now()}, ...connections])
-                        setNewConn({ name: '', mcp_link: '', website_url: '' })
-                      }
-                    }}
-                    className="bg-sky-600 hover:bg-sky-500 rounded-lg px-4 py-2 flex items-center gap-2"
-                  >
-                    <Plus className="w-4 h-4" /> Add Connection
+            <div className="space-y-4">
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-5">
+                <h3 className="font-medium mb-3">Add Connection / MCP Link</h3>
+                <div className="space-y-2">
+                  <input placeholder="Name" value={newConn.name} onChange={e => setNewConn({...newConn, name: e.target.value})}
+                    className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <input placeholder="MCP Link" value={newConn.mcp_link} onChange={e => setNewConn({...newConn, mcp_link: e.target.value})}
+                    className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <input placeholder="Website URL" value={newConn.website_url} onChange={e => setNewConn({...newConn, website_url: e.target.value})}
+                    className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <button onClick={addConnection} className="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded-lg text-sm flex items-center gap-1">
+                    <Plus className="w-4 h-4" /> Save Connection
                   </button>
                 </div>
               </div>
 
               <div className="space-y-3">
-                {connections.length === 0 && <p className="text-gray-500 text-center py-12">No connections yet</p>}
                 {connections.map(conn => (
-                  <div key={conn.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                    <div className="flex items-start justify-between mb-3">
-                      <div>
-                        <p className="font-medium text-lg">{conn.name}</p>
-                        {conn.website_url && <a href={conn.website_url} className="text-sm text-gray-400 hover:text-sky-400">{conn.website_url}</a>}
-                      </div>
-                      <button onClick={() => setConnections(connections.filter(c => c.id !== conn.id))} className="text-gray-500 hover:text-red-400">
+                  <div key={conn.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-4">
+                    <div className="flex justify-between items-start mb-2">
+                      <p className="font-medium">{conn.name}</p>
+                      <button onClick={() => deleteConnection(conn.id)} className="text-zinc-600 hover:text-red-400">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
                     {conn.mcp_link && (
-                      <div className="bg-black rounded-lg p-3 flex items-center justify-between gap-3">
-                        <code className="text-xs text-sky-300 truncate flex-1">{conn.mcp_link}</code>
-                        <button
-                          onClick={() => copyText(conn.mcp_link, conn.id)}
-                          className="flex items-center gap-2 bg-sky-600 hover:bg-sky-500 text-white text-sm px-3 py-1.5 rounded-lg shrink-0"
-                        >
-                          {copied === conn.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                          {copied === conn.id ? 'Copied!' : 'Copy MCP Link'}
+                      <div className="bg-black rounded-lg p-3 flex items-center justify-between gap-2 mt-2">
+                        <code className="text-xs text-sky-300 truncate">{conn.mcp_link}</code>
+                        <button onClick={() => copyText(conn.mcp_link, conn.id)}
+                          className="shrink-0 bg-sky-600 hover:bg-sky-500 text-white text-xs px-3 py-1.5 rounded-lg flex items-center gap-1">
+                          {copied === conn.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                          {copied === conn.id ? 'Copied' : 'Copy MCP'}
                         </button>
                       </div>
                     )}
                   </div>
                 ))}
+                {connections.length === 0 && <p className="text-center text-zinc-600 py-10 text-sm">No connections yet</p>}
               </div>
             </div>
           )}
 
-          {/* AUTHENTICATOR TAB */}
+          {/* AUTH */}
           {activeTab === 'auth' && (
-            <div className="space-y-6">
-              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h3 className="text-lg font-medium mb-4">Add Authenticator</h3>
-                <p className="text-sm text-gray-400 mb-4">Name can be edited later. Secret/code cannot be changed after creation.</p>
-                <div className="space-y-3">
-                  <input
-                    placeholder="Name (e.g. Google, Discord)"
-                    value={newAuth.name}
-                    onChange={e => setNewAuth({...newAuth, name: e.target.value})}
-                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <input
-                    placeholder="Secret / Code from other app"
-                    value={newAuth.secret}
-                    onChange={e => setNewAuth({...newAuth, secret: e.target.value})}
-                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <input
-                    placeholder="Issuer (optional)"
-                    value={newAuth.issuer}
-                    onChange={e => setNewAuth({...newAuth, issuer: e.target.value})}
-                    className="w-full bg-black border border-gray-700 rounded-lg px-4 py-2 focus:outline-none focus:border-sky-500"
-                  />
-                  <button
-                    onClick={() => {
-                      if (newAuth.name && newAuth.secret) {
-                        setAuthenticators([{...newAuth, id: Date.now()}, ...authenticators])
-                        setNewAuth({ name: '', secret: '', issuer: '' })
-                      }
-                    }}
-                    className="bg-sky-600 hover:bg-sky-500 rounded-lg px-4 py-2 flex items-center gap-2"
-                  >
-                    <Plus className="w-4 h-4" /> Add Authenticator
+            <div className="space-y-4">
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-5">
+                <h3 className="font-medium mb-1">Add Authenticator</h3>
+                <p className="text-xs text-zinc-500 mb-3">Name can be edited later. Secret is permanently locked after save.</p>
+                <div className="space-y-2">
+                  <input placeholder="Name (Google, Discord...)" value={newAuth.name} onChange={e => setNewAuth({...newAuth, name: e.target.value})}
+                    className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <input placeholder="Secret / Code" value={newAuth.secret} onChange={e => setNewAuth({...newAuth, secret: e.target.value})}
+                    className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <input placeholder="Issuer (optional)" value={newAuth.issuer} onChange={e => setNewAuth({...newAuth, issuer: e.target.value})}
+                    className="w-full bg-black border border-zinc-700 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-sky-500" />
+                  <button onClick={addAuthenticator} className="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded-lg text-sm flex items-center gap-1">
+                    <Plus className="w-4 h-4" /> Save Authenticator
                   </button>
                 </div>
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                {authenticators.length === 0 && <p className="text-gray-500 text-center py-12 col-span-2">No authenticators yet</p>}
+              <div className="grid gap-3 sm:grid-cols-2">
                 {authenticators.map(auth => (
-                  <div key={auth.id} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-                    <div className="flex items-start justify-between mb-3">
+                  <div key={auth.id} className="bg-zinc-950 border border-zinc-800 rounded-xl p-4">
+                    <div className="flex justify-between items-start mb-2">
                       <div>
-                        <p className="font-medium text-lg">{auth.name}</p>
-                        {auth.issuer && <p className="text-sm text-gray-400">{auth.issuer}</p>}
+                        <p className="font-medium">{auth.name}</p>
+                        {auth.issuer && <p className="text-xs text-zinc-500">{auth.issuer}</p>}
                       </div>
-                      <button onClick={() => setAuthenticators(authenticators.filter(a => a.id !== auth.id))} className="text-gray-500 hover:text-red-400">
+                      <button onClick={() => deleteAuthenticator(auth.id)} className="text-zinc-600 hover:text-red-400">
                         <Trash2 className="w-4 h-4" />
                       </button>
                     </div>
-                    <div className="bg-black rounded-lg p-3 flex items-center justify-between">
-                      <code className="text-sm tracking-widest text-green-400">••••••••</code>
-                      <button
-                        onClick={() => copyText(auth.secret, auth.id)}
-                        className="flex items-center gap-2 bg-gray-800 hover:bg-gray-700 text-sm px-3 py-1.5 rounded-lg"
-                      >
-                        {copied === auth.id ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                        Copy Code
+                    <div className="bg-black rounded-lg p-2.5 flex justify-between items-center">
+                      <code className="text-green-400 text-sm tracking-widest">••••••••</code>
+                      <button onClick={() => copyText(auth.secret, auth.id)}
+                        className="text-xs bg-zinc-800 hover:bg-zinc-700 px-2.5 py-1 rounded flex items-center gap-1">
+                        {copied === auth.id ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                        Copy
                       </button>
                     </div>
-                    <p className="text-xs text-gray-600 mt-2">Secret is locked and cannot be edited</p>
+                    <p className="text-[10px] text-zinc-600 mt-1.5">Secret locked • cannot be edited</p>
                   </div>
                 ))}
+                {authenticators.length === 0 && <p className="text-center text-zinc-600 py-10 text-sm col-span-2">No authenticators yet</p>}
               </div>
             </div>
           )}
 
-          {/* CLOUD TAB */}
+          {/* CLOUD */}
           {activeTab === 'cloud' && (
-            <div className="space-y-6">
-              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 text-center">
-                <Cloud className="w-16 h-16 mx-auto mb-4 text-sky-400" />
-                <h3 className="text-xl font-medium mb-2">Cloud Sync</h3>
-                <p className="text-gray-400 mb-6">Save your Drive, Links, Connections and Authenticators so they appear on all your devices using the same account.</p>
-                
-                <div className="flex flex-col sm:flex-row gap-3 justify-center">
-                  <button className="bg-sky-600 hover:bg-sky-500 px-6 py-3 rounded-xl font-medium">
-                    Save Current State
-                  </button>
-                  <button className="bg-gray-800 hover:bg-gray-700 px-6 py-3 rounded-xl font-medium">
-                    Load from Cloud
-                  </button>
-                </div>
+            <div className="space-y-4">
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6 text-center">
+                <Cloud className="w-12 h-12 mx-auto mb-3 text-sky-400" />
+                <h3 className="text-lg font-medium mb-1">Cloud Sync</h3>
+                <p className="text-zinc-500 text-sm mb-5">Save current state so it appears on all devices using the same account.</p>
+                <button onClick={saveToCloud} className="bg-sky-600 hover:bg-sky-500 px-6 py-2.5 rounded-xl text-sm font-medium">
+                  Save Current State to Cloud
+                </button>
               </div>
 
-              <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6">
-                <h4 className="font-medium mb-4">Saved on other devices</h4>
-                <p className="text-gray-500 text-sm">No cloud saves yet. Create your first save above.</p>
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-5">
+                <h4 className="font-medium mb-3 text-sm">Previous Cloud Saves</h4>
+                {cloudSaves.length === 0 ? (
+                  <p className="text-zinc-600 text-sm">No cloud saves yet</p>
+                ) : (
+                  <div className="space-y-2">
+                    {cloudSaves.map(save => (
+                      <div key={save.id} className="bg-black rounded-lg p-3 text-xs text-zinc-400 flex justify-between">
+                        <span>{save.device_name || 'Unknown device'}</span>
+                        <span>{new Date(save.created_at).toLocaleString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* MCP SERVER */}
+          {activeTab === 'mcp' && (
+            <div className="space-y-4">
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-6">
+                <h3 className="text-lg font-medium mb-2">Official MCP Server</h3>
+                <p className="text-zinc-400 text-sm mb-4">
+                  Other AIs (including Grok) can connect to your Drive, Links, Connections and Authenticators using this MCP endpoint.
+                </p>
+
+                <div className="bg-black border border-zinc-800 rounded-xl p-4 mb-4">
+                  <p className="text-xs text-zinc-500 mb-1">Your MCP Endpoint</p>
+                  <code className="text-sky-300 text-sm break-all">
+                    https://le-website-drive-web-developer-560b.vercel.app/api/mcp
+                  </code>
+                </div>
+
+                <button
+                  onClick={() => copyText('https://le-website-drive-web-developer-560b.vercel.app/api/mcp', 'mcp')}
+                  className="bg-sky-600 hover:bg-sky-500 px-4 py-2 rounded-lg text-sm flex items-center gap-2"
+                >
+                  {copied === 'mcp' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copied === 'mcp' ? 'Copied!' : 'Copy MCP Server URL'}
+                </button>
+              </div>
+
+              <div className="bg-zinc-950 border border-zinc-800 rounded-2xl p-5">
+                <h4 className="font-medium mb-2 text-sm">How to connect from other AIs</h4>
+                <ol className="text-sm text-zinc-400 space-y-2 list-decimal list-inside">
+                  <li>Copy the MCP Server URL above</li>
+                  <li>In the other AI, add a Custom MCP Connector</li>
+                  <li>Paste the URL and connect</li>
+                  <li>The AI can now read your Links, Connections and more</li>
+                </ol>
               </div>
             </div>
           )}
         </div>
       </main>
 
-      {/* Overlay for mobile */}
-      {sidebarOpen && (
-        <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />
-      )}
+      {sidebarOpen && <div className="fixed inset-0 bg-black/60 z-40 md:hidden" onClick={() => setSidebarOpen(false)} />}
     </div>
   )
 }

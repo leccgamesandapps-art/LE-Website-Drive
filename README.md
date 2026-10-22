@@ -1,29 +1,26 @@
-# LE Website Drive
+# LE Website Drive (Official)
 
-All-in-one personal Website Drive built for **INFI DATABASE** (Supabase).
+**Real** all-in-one personal Drive system powered by INFI DATABASE (Supabase).
 
 ## Features
 
 - **Drive Storage** – Encrypted personal storage
-- **Link Database** – Save and organize links
-- **Connections** – Store apps/websites + MCP links with one-click copy
-- **Authenticator** – Secure TOTP/secret storage (name editable, secret locked)
-- **Cloud** – Multi-device sync via the same account
+- **Link Database** – Real persistent links
+- **Connections** – MCP links with one-click copy
+- **Authenticator** – Secrets locked after creation
+- **Cloud Sync** – Multi-device saves
+- **Official MCP Server** – Other AIs can connect via `/api/mcp`
 
-## Connected Database
+## Official Links
 
-- Project: **INFI DATABASE**
-- URL: `https://kgiahfdkabtqpkdxcxup.supabase.co`
+- Website: https://le-website-drive-web-developer-560b.vercel.app
+- GitHub: https://github.com/leccgamesandapps-art/LE-Website-Drive
+- GitHub Profile: https://github.com/leccgamesandapps-art
 
-## Getting Started
+## MCP Endpoint
 
-```bash
-npm install
-npm run dev
+```
+https://le-website-drive-web-developer-560b.vercel.app/api/mcp
 ```
 
-Open [http://localhost:3000](http://localhost:3000)
-
-## Deploy
-
-This project is ready for Vercel.
+Other AIs can use this as a custom MCP connector.
